@@ -138,12 +138,14 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         # Connection failed — show warning.
-        # IMPORTANT: use step_id="connection_check" (same as this method) so that
-        # when the user submits the form, HA calls async_step_connection_check again
-        # with user_input != None and we create the entry without a missing-handler error.
+        # Do NOT set errors={} here: when there is no data_schema, HA renders
+        # only the error banner and skips the description entirely.
+        # All troubleshooting info (including the exact error) is in the description.
         _LOGGER.warning(
-            "Config flow connection check failed for %s (%s)", self._name, self._address
+            "Config flow connection check failed for %s (%s): %s",
+            self._name, self._address, error_message,
         )
+        self._set_confirm_only()
         return self.async_show_form(
             step_id="connection_check",
             description_placeholders={
@@ -151,7 +153,6 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "rssi": str(self._rssi) if self._rssi is not None else "unknown",
                 "error": error_message,
             },
-            errors={"base": "cannot_connect"},
         )
 
     def _is_already_connected(self) -> bool:

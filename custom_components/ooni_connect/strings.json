@@ -21,9 +21,6 @@
       "already_configured": "Device is already configured",
       "no_devices_found": "No Ooni devices found nearby. Make sure the device is powered on.",
       "not_ooni_device": "This is not an Ooni Connect device"
-    },
-    "error": {
-      "cannot_connect": "Failed to connect. See description above for troubleshooting steps."
     }
   }
 }
