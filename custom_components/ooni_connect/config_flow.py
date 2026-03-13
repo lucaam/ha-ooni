@@ -1,11 +1,12 @@
 import logging
 from typing import Any
-import voluptuous as vol  # <--- Dieser Import hat gefehlt!
+import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
+    async_ble_device_from_address,
 )
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.data_entry_flow import FlowResult
@@ -13,6 +14,7 @@ from homeassistant.data_entry_flow import FlowResult
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
 
 class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Ooni Connect Bluetooth."""
@@ -23,6 +25,10 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize the config flow."""
         self._discovery_info: BluetoothServiceInfoBleak | None = None
         self._discovered_devices: dict[str, str] = {}
+        self._address: str = ""
+        self._name: str = ""
+        self._rssi: int | None = None
+        self._connection_failed: bool = False
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
@@ -30,13 +36,15 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle bluetooth discovery."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
-        
-        # Wir prüfen, ob der Name des Geräts "OONI" enthält
+
         device_name = discovery_info.name or discovery_info.address
         if not device_name.upper().startswith("OONI"):
             return self.async_abort(reason="not_ooni_device")
 
         self._discovery_info = discovery_info
+        self._address = discovery_info.address
+        self._name = device_name
+        self._rssi = discovery_info.rssi
         self.context["title_placeholders"] = {"name": device_name}
         return await self.async_step_bluetooth_confirm()
 
@@ -45,54 +53,114 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Confirm discovery."""
         if user_input is not None:
-            return self.async_create_entry(
-                title=self._discovery_info.name,
-                data={
-                    CONF_ADDRESS: self._discovery_info.address,
-                    CONF_NAME: self._discovery_info.name,
-                },
-            )
+            return await self.async_step_connection_check()
 
         self._set_confirm_only()
         return self.async_show_form(
             step_id="bluetooth_confirm",
-            description_placeholders={"name": self._discovery_info.name},
+            description_placeholders={"name": self._name},
         )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle a flow initialized by the user (manual search)."""
-        # Wenn der Nutzer ein Gerät ausgewählt hat:
         if user_input is not None:
-            address = user_input[CONF_ADDRESS]
-            return self.async_create_entry(
-                title=self._discovered_devices[address],
-                data={
-                    CONF_ADDRESS: address,
-                    CONF_NAME: self._discovered_devices[address],
-                },
-            )
+            self._address = user_input[CONF_ADDRESS]
+            self._name = self._discovered_devices[self._address]
+            # Find RSSI from the discovery info if available
+            for info in async_discovered_service_info(self.hass):
+                if info.address == self._address:
+                    self._rssi = info.rssi
+                    break
+            return await self.async_step_connection_check()
 
-        # Scanne nach verfügbaren Bluetooth Geräten
         current_addresses = self._async_current_ids()
         for discovery_info in async_discovered_service_info(self.hass):
             address = discovery_info.address
             if address in current_addresses:
                 continue
-            
             name = discovery_info.name or address
-            # Match by local name (service_uuids and manufacturer_id are not reliable for this device)
             if name.upper().startswith("OONI"):
                 self._discovered_devices[address] = name
 
         if not self._discovered_devices:
             return self.async_abort(reason="no_devices_found")
 
-        # Zeige das Auswahlformular
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {vol.Required(CONF_ADDRESS): vol.In(self._discovered_devices)}
             ),
         )
+
+    async def async_step_connection_check(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Attempt a BLE connection and warn the user if it fails."""
+        if user_input is not None:
+            # User acknowledged the warning — add the device anyway
+            return self.async_create_entry(
+                title=self._name,
+                data={CONF_ADDRESS: self._address, CONF_NAME: self._name},
+            )
+
+        # Try to connect once to check reachability
+        connection_ok = await self._try_connect()
+
+        if connection_ok:
+            # Connected fine — create the entry immediately
+            return self.async_create_entry(
+                title=self._name,
+                data={CONF_ADDRESS: self._address, CONF_NAME: self._name},
+            )
+
+        # Connection failed — show warning and let user decide to add anyway
+        _LOGGER.warning(
+            "Config flow connection check failed for %s (%s)", self._name, self._address
+        )
+        return self.async_show_form(
+            step_id="connection_warning",
+            description_placeholders={
+                "name": self._name,
+                "rssi": str(self._rssi) if self._rssi is not None else "unknown",
+            },
+            errors={"base": "cannot_connect"},
+        )
+
+    async def _try_connect(self) -> bool:
+        """Try a single BLE connection attempt. Returns True on success."""
+        try:
+            from bleak import BleakClient
+            from bleak_retry_connector import establish_connection
+        except ImportError:
+            _LOGGER.error("bleak_retry_connector not available during config flow check")
+            return False
+
+        ble_device = async_ble_device_from_address(self.hass, self._address, connectable=True)
+        if not ble_device:
+            _LOGGER.debug("Config flow: device not reachable at %s", self._address)
+            return False
+
+        client: BleakClient | None = None
+        try:
+            _LOGGER.debug("Config flow: attempting connection to %s", self._address)
+            client = await establish_connection(
+                BleakClient,
+                device=ble_device,
+                name="Ooni Config Check",
+                max_attempts=1,
+            )
+            if client.is_connected:
+                _LOGGER.debug("Config flow: connection successful")
+                return True
+            return False
+        except Exception as err:
+            _LOGGER.debug("Config flow: connection check failed: %s", err)
+            return False
+        finally:
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
