@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "bluetooth_confirm": {
+        "title": "Add Ooni Connect device",
+        "description": "Do you want to add **{name}** to Home Assistant?"
+      },
+      "user": {
+        "title": "Add Ooni Connect device",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "connection_check": {
+        "title": "Device detected but not reachable",
+        "description": "**{name}** was detected via Bluetooth (signal strength: {rssi} dBm) but Home Assistant could not establish a connection.\n\n**Error:** `{error}`\n\nThe device will be added, but **no sensor data will be visible until a connection is established**.\n\nCommon causes:\n- **The Ooni app is open on iOS/Android** — close it completely, it blocks other connections\n- **Bonding issue** — reset the thermometer to factory settings\n- **Not enough Bluetooth proxies** — each proxy has a limited number of simultaneous connection slots; if you have several BLE devices, add more proxies near this device\n- **Proxy too far away** — move a proxy closer to the oven\n\nHome Assistant will keep retrying in the background automatically.",
+        "submit": "Add anyway"
+      }
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "no_devices_found": "No Ooni devices found nearby. Make sure the device is powered on.",
+      "not_ooni_device": "This is not an Ooni Connect device"
+    },
+    "error": {
+      "cannot_connect": "Failed to connect. See description above for troubleshooting steps."
+    }
+  }
+}
