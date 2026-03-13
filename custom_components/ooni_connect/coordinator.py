@@ -12,8 +12,8 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# Minimum seconds between connection attempts to avoid hammering the device
-_MIN_RETRY_INTERVAL = 30
+# Minimum seconds to wait after a failed connection attempt before retrying
+_MIN_RETRY_INTERVAL = 60
 
 class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
     """Manages the Ooni DT Hub BLE connection."""
@@ -70,16 +70,15 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
             now = time.monotonic()
             if not self._connecting and \
                     (now - self._last_connect_attempt) >= _MIN_RETRY_INTERVAL:
-                self._last_connect_attempt = now
+                # Set the flag BEFORE creating the task to close the race window
+                # between task creation and the coroutine actually starting.
+                self._connecting = True
                 self._connection_task = self.hass.async_create_task(self._connect_in_background())
 
         return self._last_data
 
     async def _connect_in_background(self) -> None:
         """Attempts to establish the BLE connection in the background without blocking HA."""
-        if self._connecting:
-            return
-        self._connecting = True
         try:
             from ooni_connect_bluetooth.client import Client
         except ImportError as import_err:
@@ -112,6 +111,9 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
                     self.client = None
         finally:
             self._connecting = False
+            if self.client is None:
+                # Start the cooldown from now (failure time), not from when the attempt started.
+                self._last_connect_attempt = time.monotonic()
 
     async def async_disconnect(self) -> None:
         """Disconnect from the device and cancel any pending connection task."""
