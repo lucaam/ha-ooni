@@ -36,7 +36,7 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle bluetooth discovery."""
         await self.async_set_unique_id(discovery_info.address)
-        self._abort_if_unique_id_configured()
+        self._abort_if_unique_id_configured(reload_on_update=False)
 
         device_name = discovery_info.name or discovery_info.address
         if not device_name.upper().startswith("OONI"):
@@ -69,6 +69,9 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._address = user_input[CONF_ADDRESS]
             self._name = self._discovered_devices[self._address]
+            # Set unique_id to prevent duplicates if the device is later rediscovered
+            await self.async_set_unique_id(self._address)
+            self._abort_if_unique_id_configured(reload_on_update=False)
             # Find RSSI from the discovery info if available
             for info in async_discovered_service_info(self.hass):
                 if info.address == self._address:
