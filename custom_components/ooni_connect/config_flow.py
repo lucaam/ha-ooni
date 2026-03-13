@@ -118,7 +118,7 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         # Try to connect once to check reachability
-        connection_ok = await self._try_connect()
+        connection_ok, error_message = await self._try_connect()
 
         if connection_ok:
             return self.async_create_entry(
@@ -138,6 +138,7 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "name": self._name,
                 "rssi": str(self._rssi) if self._rssi is not None else "unknown",
+                "error": error_message,
             },
             errors={"base": "cannot_connect"},
         )
@@ -150,19 +151,24 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return True
         return False
 
-    async def _try_connect(self) -> bool:
-        """Try a single BLE connection attempt with a short timeout. Returns True on success."""
+    async def _try_connect(self) -> tuple[bool, str]:
+        """Try a single BLE connection attempt with a short timeout.
+        
+        Returns (True, "") on success, (False, error_message) on failure.
+        """
         try:
             from bleak import BleakClient
             from bleak_retry_connector import establish_connection
         except ImportError:
-            _LOGGER.error("bleak_retry_connector not available during config flow check")
-            return False
+            msg = "bleak_retry_connector not available"
+            _LOGGER.error("Config flow: %s", msg)
+            return False, msg
 
         ble_device = async_ble_device_from_address(self.hass, self._address, connectable=True)
         if not ble_device:
-            _LOGGER.debug("Config flow: device not reachable at %s", self._address)
-            return False
+            msg = f"Device {self._address} not found in Bluetooth scanner"
+            _LOGGER.debug("Config flow: %s", msg)
+            return False, msg
 
         client: BleakClient | None = None
         try:
@@ -176,11 +182,18 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             if client.is_connected:
                 _LOGGER.debug("Config flow: connection successful")
-                return True
-            return False
+                return True, ""
+            return False, "Connection established but device disconnected immediately"
+        except asyncio.TimeoutError:
+            return False, "Connection timed out after 10 seconds"
         except Exception as err:
             _LOGGER.debug("Config flow: connection check failed: %s", err)
-            return False
+            # Strip the advice suffix that bleak_retry_connector appends
+            # ("Interference/range; External Bluetooth adapter…") to keep it concise
+            message = str(err)
+            if ": Interference/range" in message:
+                message = message.split(": Interference/range")[0]
+            return False, message
         finally:
             if client is not None:
                 try:
