@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 import voluptuous as vol
@@ -147,7 +148,7 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return False
 
     async def _try_connect(self) -> bool:
-        """Try a single BLE connection attempt. Returns True on success."""
+        """Try a single BLE connection attempt with a short timeout. Returns True on success."""
         try:
             from bleak import BleakClient
             from bleak_retry_connector import establish_connection
@@ -163,12 +164,13 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         client: BleakClient | None = None
         try:
             _LOGGER.debug("Config flow: attempting connection to %s", self._address)
-            client = await establish_connection(
-                BleakClient,
-                device=ble_device,
-                name="Ooni Config Check",
-                max_attempts=1,
-            )
+            async with asyncio.timeout(10):
+                client = await establish_connection(
+                    BleakClient,
+                    device=ble_device,
+                    name="Ooni Config Check",
+                    max_attempts=1,
+                )
             if client.is_connected:
                 _LOGGER.debug("Config flow: connection successful")
                 return True
