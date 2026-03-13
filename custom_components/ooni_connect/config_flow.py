@@ -38,6 +38,17 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured(reload_on_update=False)
 
+        # Also abort if an existing entry (possibly created without a unique_id)
+        # already has this address in its data. Patch its unique_id while we're here
+        # so future rediscoveries are caught by _abort_if_unique_id_configured.
+        for entry in self._async_current_entries(include_ignore=False):
+            if entry.data.get(CONF_ADDRESS) == discovery_info.address:
+                if entry.unique_id is None:
+                    self.hass.config_entries.async_update_entry(
+                        entry, unique_id=discovery_info.address
+                    )
+                return self.async_abort(reason="already_configured")
+
         device_name = discovery_info.name or discovery_info.address
         if not device_name.upper().startswith("OONI"):
             return self.async_abort(reason="not_ooni_device")
