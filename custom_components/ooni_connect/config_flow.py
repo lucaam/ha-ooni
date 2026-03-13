@@ -99,7 +99,15 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Attempt a BLE connection and warn the user if it fails."""
         if user_input is not None:
-            # User acknowledged the warning — add the device anyway
+            # User acknowledged the warning (or form was submitted) — create the entry
+            return self.async_create_entry(
+                title=self._name,
+                data={CONF_ADDRESS: self._address, CONF_NAME: self._name},
+            )
+
+        # If the device is already connected via an existing coordinator, skip the
+        # test to avoid kicking out the live connection.
+        if self._is_already_connected():
             return self.async_create_entry(
                 title=self._name,
                 data={CONF_ADDRESS: self._address, CONF_NAME: self._name},
@@ -109,24 +117,34 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         connection_ok = await self._try_connect()
 
         if connection_ok:
-            # Connected fine — create the entry immediately
             return self.async_create_entry(
                 title=self._name,
                 data={CONF_ADDRESS: self._address, CONF_NAME: self._name},
             )
 
-        # Connection failed — show warning and let user decide to add anyway
+        # Connection failed — show warning.
+        # IMPORTANT: use step_id="connection_check" (same as this method) so that
+        # when the user submits the form, HA calls async_step_connection_check again
+        # with user_input != None and we create the entry without a missing-handler error.
         _LOGGER.warning(
             "Config flow connection check failed for %s (%s)", self._name, self._address
         )
         return self.async_show_form(
-            step_id="connection_warning",
+            step_id="connection_check",
             description_placeholders={
                 "name": self._name,
                 "rssi": str(self._rssi) if self._rssi is not None else "unknown",
             },
             errors={"base": "cannot_connect"},
         )
+
+    def _is_already_connected(self) -> bool:
+        """Return True if any existing coordinator is already connected to this address."""
+        for coordinator in self.hass.data.get(DOMAIN, {}).values():
+            if getattr(coordinator, "address", None) == self._address and \
+                    getattr(coordinator, "is_connected", False):
+                return True
+        return False
 
     async def _try_connect(self) -> bool:
         """Try a single BLE connection attempt. Returns True on success."""
