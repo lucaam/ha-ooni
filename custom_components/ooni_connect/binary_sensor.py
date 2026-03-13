@@ -57,7 +57,7 @@ class OoniBinarySensor(CoordinatorEntity, BinarySensorEntity):
 
         # Special case: the connection sensor itself
         if self.entity_description.key == "status_connected":
-            return self.coordinator.last_update_success
+            return self.coordinator.is_connected
 
         # All other sensors (probes, eco mode): return None when no data is available
         if not self.coordinator.data:

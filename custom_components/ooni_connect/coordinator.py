@@ -32,6 +32,12 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
         self._lock = asyncio.Lock()
         self._connection_task = None
         self._last_connect_attempt: float = 0
+        self._connecting: bool = False
+
+    @property
+    def is_connected(self) -> bool:
+        """Return True only when the BLE client is active and connected."""
+        return self.client is not None and self.client.is_connected
 
     def _handle_bluetooth_update(self, data: Any) -> None:
         """Callback for incoming data packets."""
@@ -62,7 +68,7 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
         """Called periodically by HA to refresh data."""
         if self.client is None or not self.client.is_connected:
             now = time.monotonic()
-            if (self._connection_task is None or self._connection_task.done()) and \
+            if not self._connecting and \
                     (now - self._last_connect_attempt) >= _MIN_RETRY_INTERVAL:
                 self._last_connect_attempt = now
                 self._connection_task = self.hass.async_create_task(self._connect_in_background())
@@ -71,31 +77,50 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
 
     async def _connect_in_background(self) -> None:
         """Attempts to establish the BLE connection in the background without blocking HA."""
+        if self._connecting:
+            return
+        self._connecting = True
         try:
             from ooni_connect_bluetooth.client import Client
         except ImportError as import_err:
             _LOGGER.error("Cannot import ooni_connect_bluetooth: %s", import_err)
+            self._connecting = False
             return
 
-        async with self._lock:
-            _LOGGER.debug("Looking for BLE device with address %s...", self.address)
-            ble_device = async_ble_device_from_address(self.hass, self.address, connectable=True)
-            if not ble_device:
-                _LOGGER.debug("Ooni device not reachable at address: %s", self.address)
-                return
+        try:
+            async with self._lock:
+                _LOGGER.debug("Looking for BLE device with address %s...", self.address)
+                ble_device = async_ble_device_from_address(self.hass, self.address, connectable=True)
+                if not ble_device:
+                    _LOGGER.debug("Ooni device not reachable at address: %s", self.address)
+                    return
 
-            _LOGGER.info("BLE device found: %s", ble_device.name or ble_device.address)
+                _LOGGER.info("BLE device found: %s", ble_device.name or ble_device.address)
 
+                try:
+                    _LOGGER.info("Establishing background connection to Ooni...")
+                    # establish_connection (bleak_retry_connector) manages its own retries and timeouts.
+                    # Do NOT wrap with asyncio.timeout here — it would cut off the retry cycle prematurely.
+                    self.client = await Client.connect(
+                        device=ble_device,
+                        notify_callback=self._handle_bluetooth_update,
+                        disconnected_callback=self._on_disconnected
+                    )
+                    _LOGGER.info("Ooni successfully connected in the background")
+                except Exception as err:
+                    _LOGGER.error("Background connection failed: %s (%s)", err, type(err).__name__, exc_info=True)
+                    self.client = None
+        finally:
+            self._connecting = False
+
+    async def async_disconnect(self) -> None:
+        """Disconnect from the device and cancel any pending connection task."""
+        if self._connection_task and not self._connection_task.done():
+            self._connection_task.cancel()
+            self._connection_task = None
+        if self.client is not None:
             try:
-                _LOGGER.info("Establishing background connection to Ooni...")
-                # establish_connection (bleak_retry_connector) manages its own retries and timeouts.
-                # Do NOT wrap with asyncio.timeout here — it would cut off the retry cycle prematurely.
-                self.client = await Client.connect(
-                    device=ble_device,
-                    notify_callback=self._handle_bluetooth_update,
-                    disconnected_callback=self._on_disconnected
-                )
-                _LOGGER.info("Ooni successfully connected in the background")
-            except Exception as err:
-                _LOGGER.error("Background connection failed: %s (%s)", err, type(err).__name__, exc_info=True)
-                self.client = None
+                await self.client.disconnect()
+            except Exception:
+                pass
+            self.client = None
