@@ -12,10 +12,10 @@
   "version": "1.0.0",
   "bluetooth": [
     {
-      "service_uuid": "0000cee0-0000-1000-8000-00805f9b34fb"
+      "local_name": "Ooni_DT_Hub"
     },
     {
-      "manufacturer_id": 34714
+      "local_name": "Ooni_DT_*"
     }
   ]
 }

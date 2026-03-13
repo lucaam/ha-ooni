@@ -33,13 +33,7 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         
         # Wir prüfen, ob der Name des Geräts "OONI" enthält
         device_name = discovery_info.name or discovery_info.address
-        service_uuids = [str(u).lower() for u in (discovery_info.service_uuids or [])]
-        is_ooni = (
-            "0000cee0-0000-1000-8000-00805f9b34fb" in service_uuids
-            or 34714 in (discovery_info.manufacturer_data or {})
-            or "OONI" in device_name.upper()
-        )
-        if not is_ooni:
+        if not device_name.upper().startswith("OONI"):
             return self.async_abort(reason="not_ooni_device")
 
         self._discovery_info = discovery_info
@@ -88,11 +82,8 @@ class OoniConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 continue
             
             name = discovery_info.name or address
-            # Match by service UUID (most reliable) or by name as fallback
-            service_uuids = [str(u).lower() for u in (discovery_info.service_uuids or [])]
-            if "0000cee0-0000-1000-8000-00805f9b34fb" in service_uuids or \
-                    34714 in (discovery_info.manufacturer_data or {}) or \
-                    "OONI" in name.upper():
+            # Match by local name (service_uuids and manufacturer_id are not reliable for this device)
+            if name.upper().startswith("OONI"):
                 self._discovered_devices[address] = name
 
         if not self._discovered_devices:
