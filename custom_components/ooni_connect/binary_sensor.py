@@ -7,32 +7,31 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
-# Hier fügen wir den neuen Sensor "status_connected" hinzu
 BINARY_SENSORS: tuple[BinarySensorEntityDescription, ...] = (
     BinarySensorEntityDescription(
         key="status_connected",
-        name="Bluetooth Verbindung",
+        name="Bluetooth Connection",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
     ),
     BinarySensorEntityDescription(
         key="probe_p1_connected",
-        name="Sonde 1 Verbunden",
+        name="Probe 1 Connected",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
     ),
     BinarySensorEntityDescription(
         key="probe_p2_connected",
-        name="Sonde 2 Verbunden",
+        name="Probe 2 Connected",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
     ),
     BinarySensorEntityDescription(
         key="eco_mode",
-        name="Eco Modus",
+        name="Eco Mode",
         device_class=BinarySensorDeviceClass.POWER,
     ),
 )
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Richtet die binären Sensoren ein."""
+    """Set up binary sensors."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         OoniBinarySensor(coordinator, description)
@@ -40,7 +39,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     )
 
 class OoniBinarySensor(CoordinatorEntity, BinarySensorEntity):
-    """Repräsentiert einen binären Sensor (Ja/Nein)."""
+    """Represents a binary (on/off) sensor."""
 
     def __init__(self, coordinator, description):
         super().__init__(coordinator)
@@ -54,27 +53,24 @@ class OoniBinarySensor(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        """Entscheidet, ob der Sensor 'An' oder 'Aus' ist."""
-        
-        # 1. Spezialfall: Der Verbindungs-Sensor selbst
+        """Return whether the sensor is on or off."""
+
+        # Special case: the connection sensor itself
         if self.entity_description.key == "status_connected":
-            # Wenn das letzte Update erfolgreich war, sind wir verbunden
             return self.coordinator.last_update_success
 
-        # 2. Alle anderen Sensoren (Sonden, Eco Mode)
-        # Wenn wir gar keine Daten haben (z.B. ganz am Anfang oder offline), sind sie aus/falsch
+        # All other sensors (probes, eco mode): return None when no data is available
         if not self.coordinator.data:
-            return None # Oder False, je nach Geschmack
-        
-        # Wert aus dem Daten-Objekt holen
+            return None
+
         return getattr(self.coordinator.data, self.entity_description.key, False)
 
     @property
     def available(self) -> bool:
-        """Wann ist der Sensor überhaupt verfügbar?"""
-        # Der Verbindungssensor ist IMMER verfügbar (er zeigt ja an, ob es geht oder nicht)
+        """Return whether the sensor is available."""
+        # The connection sensor is always available (it represents the connection state itself)
         if self.entity_description.key == "status_connected":
             return True
-        
-        # Alle anderen Sensoren sind nur verfügbar, wenn wir Daten haben
+
+        # All other sensors are only available when data has been received
         return self.coordinator.last_update_success

@@ -12,39 +12,38 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# Wir definieren hier die Sensoren mit festen Einheiten
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="battery",
-        name="Batterie",
+        name="Battery",
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key="ambient_a",
-        name="Umgebungstemperatur A",
+        name="Ambient Temperature A",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key="ambient_b",
-        name="Umgebungstemperatur B",
+        name="Ambient Temperature B",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key="probe_p1",
-        name="Sonde 1",
+        name="Probe 1",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key="probe_p2",
-        name="Sonde 2",
+        name="Probe 2",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
@@ -52,7 +51,7 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
 )
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Sensoren einrichten."""
+    """Set up sensors."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         OoniTemperatureSensor(coordinator, description)
@@ -60,7 +59,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     )
 
 class OoniTemperatureSensor(CoordinatorEntity, SensorEntity):
-    """Repräsentiert einen Ooni Sensor."""
+    """Represents an Ooni sensor."""
 
     def __init__(self, coordinator, description):
         super().__init__(coordinator)
@@ -74,14 +73,14 @@ class OoniTemperatureSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Gibt den Wert vom Gerät 1:1 zurück."""
+        """Return the sensor value as received from the device."""
         if not self.coordinator.data:
             return None
-        
+
         val = getattr(self.coordinator.data, self.entity_description.key, None)
-        
-        # Falls es der Einheiten-Sensor ist, extrahieren wir den Buchstaben (C/F)
+
+        # For temperature_unit, extract the string value (C/F)
         if self.entity_description.key == "temperature_unit" and val is not None:
             return getattr(val, "value", str(val))
-            
+
         return val
