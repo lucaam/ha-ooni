@@ -70,9 +70,12 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
             now = time.monotonic()
             if not self._connecting and \
                     (now - self._last_connect_attempt) >= _MIN_RETRY_INTERVAL:
-                # Set the flag BEFORE creating the task to close the race window
-                # between task creation and the coroutine actually starting.
+                # Set both the flag AND the timestamp BEFORE creating the task:
+                # - flag prevents a second task from being spawned before this one starts
+                # - timestamp prevents an immediate re-spawn if the task fails very quickly
+                #   (e.g. before establish_connection is even reached)
                 self._connecting = True
+                self._last_connect_attempt = now
                 self._connection_task = self.hass.async_create_task(self._connect_in_background())
 
         return self._last_data
@@ -100,19 +103,31 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
                     _LOGGER.info("Establishing background connection to Ooni...")
                     # establish_connection (bleak_retry_connector) manages its own retries and timeouts.
                     # Do NOT wrap with asyncio.timeout here — it would cut off the retry cycle prematurely.
-                    self.client = await Client.connect(
+                    client = await Client.connect(
                         device=ble_device,
                         notify_callback=self._handle_bluetooth_update,
                         disconnected_callback=self._on_disconnected
                     )
-                    _LOGGER.info("Ooni successfully connected in the background")
+                    # The library can return a non-None but already-disconnected client
+                    # if _start_notify() raises (it swallows the exception with `pass`).
+                    # Treat that case as a failure.
+                    if client is not None and client.is_connected:
+                        self.client = client
+                        _LOGGER.info("Ooni successfully connected in the background")
+                    else:
+                        _LOGGER.error("Connection returned but device is not connected (notify setup may have failed)")
+                        self.client = None
                 except Exception as err:
                     _LOGGER.error("Background connection failed: %s (%s)", err, type(err).__name__, exc_info=True)
                     self.client = None
         finally:
             self._connecting = False
-            if self.client is None:
-                # Start the cooldown from now (failure time), not from when the attempt started.
+            if self.client is None or not self.client.is_connected:
+                # Normalize a disconnected-but-not-None client to None
+                self.client = None
+                # Reset the cooldown timestamp from the actual failure time, not from
+                # when the attempt started (set in _async_update_data). This ensures
+                # the full _MIN_RETRY_INTERVAL is respected after a long-running failure.
                 self._last_connect_attempt = time.monotonic()
 
     async def async_disconnect(self) -> None:
