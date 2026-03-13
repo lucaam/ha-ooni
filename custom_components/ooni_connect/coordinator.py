@@ -4,16 +4,22 @@ import asyncio
 import time
 from typing import Any
 
+from bleak import BleakClient
+from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak_retry_connector import establish_connection, BleakOutOfConnectionSlotsError
 from homeassistant.components.bluetooth import async_ble_device_from_address
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# Minimum seconds to wait after a failed connection attempt before retrying
+# Minimum seconds to wait after a normal failed connection attempt before retrying
 _MIN_RETRY_INTERVAL = 60
+# Longer backoff when the proxy runs out of connection slots;
+# slots are held for ~30-60s after a dropped attempt, so wait longer.
+_OUT_OF_SLOTS_RETRY_INTERVAL = 300
 
 class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
     """Manages the Ooni DT Hub BLE connection."""
@@ -84,6 +90,10 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
         """Attempts to establish the BLE connection in the background without blocking HA."""
         try:
             from ooni_connect_bluetooth.client import Client
+            from ooni_connect_bluetooth.packets import PacketNotify
+            from ooni_connect_bluetooth.services import NotifyCharacteristic
+            from ooni_connect_bluetooth.const import MainService
+            from ooni_connect_bluetooth.exceptions import DecodeError
         except ImportError as import_err:
             _LOGGER.error("Cannot import ooni_connect_bluetooth: %s", import_err)
             self._connecting = False
@@ -101,22 +111,48 @@ class OoniConnectCoordinator(DataUpdateCoordinator[Any]):
 
                 try:
                     _LOGGER.info("Establishing background connection to Ooni...")
-                    # establish_connection (bleak_retry_connector) manages its own retries and timeouts.
-                    # Do NOT wrap with asyncio.timeout here — it would cut off the retry cycle prematurely.
-                    client = await Client.connect(
+                    # Use establish_connection directly so we can limit max_attempts.
+                    # Keeping it low (3) avoids exhausting all proxy slots in a single run.
+
+                    def _disconnected_callback(bleak_client: BleakClient) -> None:
+                        _LOGGER.info("Device disconnected %s", bleak_client.address)
+                        self._on_disconnected()
+
+                    bleak_client = await establish_connection(
+                        BleakClient,
                         device=ble_device,
-                        notify_callback=self._handle_bluetooth_update,
-                        disconnected_callback=self._on_disconnected
+                        name="Ooni Connect Connection",
+                        disconnected_callback=_disconnected_callback,
+                        max_attempts=3,
                     )
-                    # The library can return a non-None but already-disconnected client
-                    # if _start_notify() raises (it swallows the exception with `pass`).
-                    # Treat that case as a failure.
-                    if client is not None and client.is_connected:
+
+                    client = Client(bleak_client, None)
+
+                    def _notify_data(char: BleakGATTCharacteristic, data: bytearray) -> None:
+                        try:
+                            packet_data = NotifyCharacteristic.decode(data)
+                            packet = PacketNotify.decode(packet_data)
+                        except DecodeError as exc:
+                            _LOGGER.error("Failed to decode: %s with error %s", data, exc)
+                            return
+                        self._handle_bluetooth_update(packet)
+
+                    await bleak_client.start_notify(MainService.notify.uuid, _notify_data)
+
+                    if bleak_client.is_connected:
                         self.client = client
                         _LOGGER.info("Ooni successfully connected in the background")
                     else:
-                        _LOGGER.error("Connection returned but device is not connected (notify setup may have failed)")
+                        _LOGGER.error("Connection returned but device is not connected")
                         self.client = None
+                except BleakOutOfConnectionSlotsError as err:
+                    _LOGGER.warning(
+                        "Proxy out of connection slots — waiting %ds before next attempt: %s",
+                        _OUT_OF_SLOTS_RETRY_INTERVAL, err,
+                    )
+                    self.client = None
+                    # Override the cooldown to a longer value
+                    self._last_connect_attempt = time.monotonic() + _OUT_OF_SLOTS_RETRY_INTERVAL - _MIN_RETRY_INTERVAL
                 except Exception as err:
                     _LOGGER.error("Background connection failed: %s (%s)", err, type(err).__name__, exc_info=True)
                     self.client = None
